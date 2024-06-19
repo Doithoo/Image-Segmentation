@@ -12,29 +12,47 @@ import os
 
 
 class SmoothedValue(object):
-    """Track a series of values and provide access to smoothed values over a
-    window or the global series average.
+    """
+    SmoothedValue类设计用于监控并平滑处理一系列数值数据，
+    主要应用于机器学习训练过程中的指标追踪（如损失、准确率等），
+    旨在提供窗口内平滑值、全局平均值以及其它统计信息。
     """
 
     def __init__(self, window_size=20, fmt=None):
+        """
+        :param window_size: 窗口大小，默认为20，表示用于计算平滑值的最近数据点数量。
+        :param fmt: 输出格式字符串，默认为"{value:.4f} ({global_avg:.4f})"，
+        用于格式化打印输出，展示当前值与全局平均值。
+        """
         if fmt is None:
             fmt = "{value:.4f} ({global_avg:.4f})"
+
         self.deque = deque(maxlen=window_size)
         self.total = 0.0
         self.count = 0
         self.fmt = fmt
 
     def update(self, value, n=1):
+        """
+        更新跟踪的值，增加指定次数n的value到统计中。
+        :param value:
+        :param n:
+        :return:
+        """
         self.deque.append(value)
         self.count += n
         self.total += value * n
 
     def synchronize_between_processes(self):
         """
-        Warning: does not synchronize the deque!
+        在分布式训练环境下同步count和total的值，但注意它不直接同步deque内的数据。
+        只有当分布式环境可用并初始化时执行此操作。
+        :return:
         """
+
         if not is_dist_avail_and_initialized():
             return
+
         t = torch.tensor([self.count, self.total], dtype=torch.float64, device='cuda')
         dist.barrier()
         dist.all_reduce(t)
@@ -44,27 +62,53 @@ class SmoothedValue(object):
 
     @property
     def median(self):
+        """
+        返回deque中所有值的中位数，使用PyTorch计算后转换为Python标量。
+        :return:
+        """
+
         d = torch.tensor(list(self.deque))
         return d.median().item()
 
     @property
     def avg(self):
+        """
+        返回deque中所有值的平均值。
+        :return:
+        """
+
         d = torch.tensor(list(self.deque), dtype=torch.float32)
         return d.mean().item()
 
     @property
     def global_avg(self):
+        """
+        返回整个序列的全局平均值，即total除以count。
+        :return:
+        """
         return self.total / self.count
 
     @property
     def max(self):
+        """
+        返回deque中的最大值。
+        :return:
+        """
         return max(self.deque)
 
     @property
     def value(self):
+        """
+        返回deque中的最后一个加入的值。
+        :return:
+        """
         return self.deque[-1]
 
     def __str__(self):
+        """
+        格式化输出当前跟踪的统计信息，包括中位数、平均值、全局平均值、最大值和当前值，依据初始化时设定的fmt格式。
+        :return:
+        """
         return self.fmt.format(
             median=self.median,
             avg=self.avg,
@@ -128,7 +172,7 @@ class ConfusionMatrix(object):
 class MetricLogger(object):
     def __init__(self, delimiter="\t"):
         self.meters = defaultdict(SmoothedValue)
-        self.delimiter = delimiter
+        self.delimiter = delimiter # 分隔符
 
     def update(self, **kwargs):
         for k, v in kwargs.items():
@@ -163,6 +207,7 @@ class MetricLogger(object):
         iter_time = SmoothedValue(fmt='{avg:.4f}')
         data_time = SmoothedValue(fmt='{avg:.4f}')
         space_fmt = f':{len(str(len(iterable)))}d'
+
         if torch.cuda.is_available():
             log_msg = self.delimiter.join([
                 header,
@@ -182,11 +227,14 @@ class MetricLogger(object):
                 'time: {time}',
                 'data: {data}'
             ])
+
         MB = 1024.0 * 1024.0
         for i, obj in enumerate(iterable):
             data_time.update(time.time() - end)
             yield obj
             iter_time.update(time.time() - end)
+
+            # 每多少个steps打印一次日志
             if i % print_freq == 0:
                 eta_seconds = iter_time.global_avg * (len(iterable) - i)
                 eta_string = str(datetime.timedelta(seconds=int(eta_seconds)))

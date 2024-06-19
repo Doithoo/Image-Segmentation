@@ -1,4 +1,25 @@
 # Ignore all pth files
 **/save_weight
+**/pretrained_weight
 .idea/
 **/*.png
+**/data
+
+**/__pycache__
+**/*.pth
+**/*.pkl
+**/*.log
+**/*.txt
+**/*.yaml
+**/*.json
+**/*.md
+**/*.ipynb
+**/*.pyc
+**/*.pyd
+**/*.pyo
+**/*.pyx
+**/*.c
+**/*.cpp
+**/*.so
+**/*.dll
+**/*.dylib

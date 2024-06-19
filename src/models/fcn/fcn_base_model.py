@@ -10,6 +10,10 @@ from torch import nn, Tensor
 from torch.nn import functional as F
 from .backbone import resnet50, resnet101
 
+__all__ = [
+    "fcn_resnet50",
+    "fcn_resnet101",
+]
 
 class IntermediateLayerGetter(nn.ModuleDict):
     """
