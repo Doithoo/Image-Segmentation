@@ -6,10 +6,28 @@ import datetime
 import time
 import torch
 import torch.distributed as dist
+import numpy as np
+
+# 它是一个用于创建和管理表格的简单库，可以帮助我们以美观的方式在控制台中打印表格数据。
+from prettytable import PrettyTable
 
 import errno
 import os
 
+
+__all__ = [
+    "SmoothedValue",
+    "ConfusionMatrix",
+    "MetricLogger",
+    "mkdir",
+    "setup_for_distributed",
+    "is_dist_avail_and_initialized",
+    "get_world_size",
+    "get_rank",
+    "is_main_process",
+    "save_on_master",
+    "init_distributed_mode",
+]
 
 class SmoothedValue(object):
     """
@@ -118,55 +136,82 @@ class SmoothedValue(object):
 
 
 class ConfusionMatrix(object):
-    def __init__(self, num_classes):
+    def __init__(self, num_classes, class_names):
+        self.matrix = np.zeros((num_classes, num_classes))
         self.num_classes = num_classes
-        self.mat = None
+        self.class_names = class_names
 
-    def update(self, a, b):
-        n = self.num_classes
-        if self.mat is None:
-            # 创建混淆矩阵
-            self.mat = torch.zeros((n, n), dtype=torch.int64, device=a.device)
-        with torch.no_grad():
-            # 寻找GT中为目标的像素索引
-            k = (a >= 0) & (a < n)
-            # 统计像素真实类别a[k]被预测成类别b[k]的个数(这里的做法很巧妙)
-            inds = n * a[k].to(torch.int64) + b[k]
-            self.mat += torch.bincount(inds, minlength=n ** 2).reshape(n, n)
+    def update(self, preds, labels):
+        k = (labels >= 0) & (labels < self.num_classes)
+        for p, t in zip(preds[k], labels[k]):
+            self.matrix[p, t] += 1
 
-    def reset(self):
-        if self.mat is not None:
-            self.mat.zero_()
 
     def compute(self):
-        h = self.mat.float()
-        # 计算全局预测准确率(混淆矩阵的对角线为预测正确的个数)
-        acc_global = torch.diag(h).sum() / h.sum()
-        # 计算每个类别的准确率
-        acc = torch.diag(h) / h.sum(1)
-        # 计算每个类别预测与真实目标的iou
-        iu = torch.diag(h) / (h.sum(1) + h.sum(0) - torch.diag(h))
-        return acc_global, acc, iu
+
+        # calculate accuracy
+        sum_TP = 0
+        for i in range(self.num_classes):
+            sum_TP += self.matrix[i, i]
+
+        ious = []
+
+        for i in range(self.num_classes):
+            TP = self.matrix[i, i]  # 对角线总数
+            FP = np.sum(self.matrix[i, :]) - TP  # pred总数 - TP
+            FN = np.sum(self.matrix[:, i]) - TP  # Truth - TP
+
+            iou = round(TP / (TP + FP + FN), 3) if TP + FP + FN != 0 else 0.
+            ious.append(iou)
+
+        acc_global = sum_TP / np.sum(self.matrix)
+        miou = np.nanmean(ious)
+
+        return acc_global, miou, ious
+    def summary(self):
+
+        # calculate accuracy
+        sum_TP = 0
+        for i in range(self.num_classes):
+            sum_TP += self.matrix[i, i]
+
+        ious = []
+        # precision, recall, f1-score, iou
+        table = PrettyTable()
+        table.field_names = ["", "Precision", "Recall", "F1-score", "IoU"]
+
+        for i in range(self.num_classes):
+            TP = self.matrix[i, i]  # 对角线总数
+            FP = np.sum(self.matrix[i, :]) - TP  # pred总数 - TP
+            FN = np.sum(self.matrix[:, i]) - TP  # Truth - TP
+            TN = np.sum(self.matrix) - TP - FP - FN
+            Precision = round(TP / (TP + FP), 3) if TP + FP != 0 else 0.
+            Recall = round(TP / (TP + FN), 3) if TP + FN != 0 else 0.
+            F1_score = round(2 * TP / (np.sum(self.matrix) + TP - TN), 3) if np.sum(self.matrix) + TP - TN != 0 else 0.
+            iou = round(TP / (TP + FP + FN), 3) if TP + FP + FN != 0 else 0.
+            ious.append(iou)
+
+            table.add_row([self.class_names[i], Precision, Recall, F1_score, iou])
+
+        acc_global = sum_TP / np.sum(self.matrix)
+        miou = np.nanmean(ious)
+
+        print("the model's accuracy is ", acc_global)
+        print("the model's mIoU is ", miou)
+        print(table)
 
     def reduce_from_all_processes(self):
+        """
+        在多GPU分布式训练环境中，使用torch.distributed API来收集所有进程上的混淆矩阵，
+        确保所有进程具有相同的汇总混淆矩阵。
+        :return:
+        """
         if not torch.distributed.is_available():
             return
         if not torch.distributed.is_initialized():
             return
         torch.distributed.barrier()
-        torch.distributed.all_reduce(self.mat)
-
-    def __str__(self):
-        acc_global, acc, iu = self.compute()
-        return (
-            'global correct: {:.1f}\n'
-            'average row correct: {}\n'
-            'IoU: {}\n'
-            'mean IoU: {:.1f}').format(
-            acc_global.item() * 100,
-            ['{:.1f}'.format(i) for i in (acc * 100).tolist()],
-            ['{:.1f}'.format(i) for i in (iu * 100).tolist()],
-            iu.mean().item() * 100)
+        torch.distributed.all_reduce(self.matrix)
 
 
 class MetricLogger(object):

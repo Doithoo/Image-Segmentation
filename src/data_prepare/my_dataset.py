@@ -3,6 +3,7 @@
 # @Description :
 import os
 from torch.utils.data import Dataset
+
 from PIL import Image
 
 # 自定义数据集
@@ -30,6 +31,7 @@ class VOCSegmentation(Dataset):
         assert (len(self.images) == len(self.masks))
         self.transforms = transforms
 
+
     def __getitem__(self, index):
         """
         Args:
@@ -43,6 +45,7 @@ class VOCSegmentation(Dataset):
 
         if self.transforms is not None:
             img, target = self.transforms(img, target)
+
 
         return img, target
 

@@ -3,7 +3,8 @@
 # @Description :
 import torch
 from torch import nn
-import distributed_utils as utils
+
+from .distributed_utils import ConfusionMatrix, MetricLogger, SmoothedValue
 
 __all__ = [
     "evaluate",
@@ -13,7 +14,7 @@ __all__ = [
 
 def criterion(inputs, target):
     # 针对多个输出层，包括辅助输出层
-    losses = {name: nn.functional.cross_entropy(x, target, ignore_index=255) for name, x in inputs.items()}
+    losses = {name: nn.functional.cross_entropy(x, target.squeeze(1).long(), ignore_index=255) for name, x in inputs.items()}
 
     if len(losses) == 1:
         return losses['out']
@@ -21,22 +22,24 @@ def criterion(inputs, target):
     return losses['out'] + 0.5 * losses['aux']
 
 
-def evaluate(model, data_loader, device, num_classes):
+def evaluate(model, data_loader, device, num_classes, class_names):
     model.eval()
-    confmat = utils.ConfusionMatrix(num_classes)
-    metric_logger = utils.MetricLogger(delimiter="  ")
+    confmat = ConfusionMatrix(num_classes=num_classes, class_names=class_names)
+    metric_logger = MetricLogger(delimiter="  ")
     header = 'Test:'
+    val_loss = 0.0
     with torch.no_grad():
-        for image, target in metric_logger.log_every(data_loader, 100, header):
+        for image, target in metric_logger.log_every(data_loader, print_freq=100, header=header):
             image, target = image.to(device), target.to(device)
             output = model(image)
+            val_loss += criterion(output, target).item()
             output = output['out']
 
-            confmat.update(target.flatten(), output.argmax(1).flatten())
+            confmat.update(output.argmax(1).flatten().cpu().numpy(), target.long().flatten().cpu().numpy())
 
         confmat.reduce_from_all_processes()
 
-    return confmat
+    return confmat, val_loss / len(data_loader)
 
 
 def safe_get_lr(optimizer):
@@ -52,9 +55,9 @@ def safe_get_lr(optimizer):
 
 def train_one_epoch(model, optimizer, data_loader, device, epoch, lr_scheduler, print_freq=10, scaler=None):
     model.train()
-    metric_logger = utils.MetricLogger(delimiter="  ") # 创建一个日志记录器, 使用空格分割
-    metric_logger.add_meter('lr', utils.SmoothedValue(window_size=1, fmt='{value:.6f}'))
-    header = f'Epoch: [{epoch + 1}]' # 从1开始
+    metric_logger = MetricLogger(delimiter="  ") # 创建一个日志记录器, 使用空格分割
+    metric_logger.add_meter('lr', SmoothedValue(window_size=1, fmt='{value:.6f}'))
+    header = f'Epoch: [{epoch}]' # 从1开始
     lr = None
     for image, target in metric_logger.log_every(data_loader, print_freq, header):
         image, target = image.to(device), target.to(device)

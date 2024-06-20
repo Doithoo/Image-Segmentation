@@ -2,13 +2,15 @@
 # @File    : fcn_base_model.py
 # @Description :
 from collections import OrderedDict
-
 from typing import Dict
 
 import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
 from .backbone import resnet50, resnet101
+
+from ptflops import get_model_complexity_info
+from torchinfo import summary
 
 __all__ = [
     "fcn_resnet50",
@@ -88,6 +90,16 @@ class FCN(nn.Module):
         self.backbone = backbone
         self.classifier = classifier
         self.aux_classifier = aux_classifier
+
+        # initial weights
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
 
     def forward(self, x: Tensor) -> Dict[str, Tensor]:
         input_shape = x.shape[-2:]
@@ -181,3 +193,17 @@ def fcn_resnet101(aux, num_classes=21, pretrain_backbone=False):
     model = FCN(backbone, classifier, aux_classifier)
 
     return model
+
+if __name__ == '__main__':
+    from backbone import resnet50, resnet101
+
+    model = fcn_resnet50(aux=False, num_classes=21, pretrain_backbone=False)
+    # model = fcn_resnet101(aux=False, num_classes=21, pretrain_backbone=False)
+    summary(model, input_size=(1, 3, 480, 480))
+
+    macs, params = get_model_complexity_info(model, (3, 480, 480), as_strings=True, print_per_layer_stat=False)
+    print('{:<30}  {:<8}'.format('Computational complexity: ', macs))
+    print('{:<30}  {:<8}'.format('Number of parameters: ', params))
+
+# Computational complexity:       26.56 GMac
+# Number of parameters:           32.96 M
